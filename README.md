@@ -1,64 +1,92 @@
-# AI Excel Agent
+# AI Data Consultant
 
-A free, lightweight proof of concept that turns natural-language requests into professional Excel reports using real World Bank Open Data. It uses a deterministic rule-based parser—no LLM, API key, database, or paid service.
+A lightweight conversational public-data assistant that turns rule-parsed questions into merged, analysis-ready Excel and CSV reports. It supports multiple metrics, multiple countries, follow-up prompts and transparent source metadata without an LLM, database or paid service.
 
-## Features
+## Data sources
 
-- Detects supported countries, indicators, explicit ranges, and “last X years”
-- Retrieves real values directly from the World Bank public API
-- Produces an in-memory `.xlsx` with Dashboard, Data, and Sources sheets
-- Includes an Excel-native comparison chart and exact source URLs
-- Never invents missing values; unavailable observations remain blank
-- Limits reports to 10 countries, 30 years, and 500 prompt characters
+- **World Bank** — always available without a key: GDP, GDP Growth, Population, Inflation, Life Expectancy and Unemployment.
+- **FRED** — optional `FRED_API_KEY`: Brent crude, WTI crude, US Federal Funds Rate and US CPI. Higher-frequency observations are documented and converted to annual averages.
+- **India Open Data** — optional connector foundation for explicitly registered data.gov.in resources. No arbitrary resource IDs or URLs are accepted.
 
-Supported indicators: GDP, GDP Growth, Population, Inflation, and Life Expectancy.
+If an optional connector is unavailable, the app returns available datasets and clearly lists the omitted source. It never invents missing observations.
 
-## Run Locally
+## Architecture
 
-```bash
-git clone YOUR_REPOSITORY
-cd ai-excel-agent
-python -m venv venv
+```text
+Question → rule-based parser → query planner → source router
+         → registered connectors → normalize → merge by year
+         → chat preview → in-memory Excel / CSV downloads
 ```
 
-Windows:
+Conversation context is stored in the signed Flask session. Generated files use random, short-lived in-memory tokens and expire after 15 minutes. Limits are 5 countries, 5 metrics, 30 years, 10 preview rows and 4 charts.
+
+## Run locally
 
 ```powershell
+git clone https://github.com/Azam53/AI_Excel_Agent.git
+cd AI_Excel_Agent
+python -m venv venv
 venv\Scripts\activate
-```
-
-Linux/macOS:
-
-```bash
-source venv/bin/activate
-```
-
-Then:
-
-```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 python app.py
 ```
 
 Open `http://127.0.0.1:5000`.
 
-Run tests with `pytest -q` and use the production server with `gunicorn --timeout 180 app:app` (Gunicorn runs on Linux hosting environments).
+Optional local configuration can be copied from `.env.example`. Set values in your shell or hosting environment; the app works with World Bank alone.
+
+```env
+FRED_API_KEY=
+DATA_GOV_IN_API_KEY=
+FLASK_SECRET_KEY=replace-with-a-long-random-value
+```
+
+Run tests:
+
+```powershell
+python -m pytest -q
+```
+
+## Conversation examples
+
+```text
+Compare India and UAE GDP and inflation from 2015 to 2025
+Compare India's GDP with Brent crude oil prices from 2015 to 2025
+Show India's unemployment and GDP growth from 2015 to 2025
+```
+
+Limited rule-based follow-ups are supported:
+
+```text
+Add Saudi Arabia
+Add inflation too
+Only show data after 2020
+```
+
+“After 2020” consistently means 2021 onward.
+
+## API
+
+- `POST /api/chat` — plan, fetch, merge and return a chat response and download token.
+- `GET /api/download/<token>/excel` — download the combined workbook.
+- `GET /api/download/<token>/csv` — download combined CSV data.
+- `POST /api/chat/reset` — clear conversation context.
+- `GET /api/sources` — connector availability.
+- `POST /api/generate` — preserved legacy single-metric Excel endpoint.
 
 ## Deploy to Render
 
-1. Push this project to GitHub.
-2. Create or sign in to a Render account.
-3. Select **New Web Service** and connect the repository.
-4. Choose the Python runtime and an available free instance type.
-5. Set the build command to `pip install -r requirements.txt`.
-6. Set the start command to `gunicorn --timeout 180 app:app`.
-7. Add `PYTHON_VERSION` with the value `3.11.11`.
-8. Deploy and open the generated public URL.
+The included `render.yaml` deploys one free Python web service with no database or disk.
 
-No environment variables, database, persistent disk, worker, or API key is required. `render.yaml` contains the same configuration for Blueprint deployment.
+1. Push the repository to GitHub.
+2. In Render, create a **New Web Service** and connect the repository.
+3. Use build command `pip install -r requirements.txt`.
+4. Use start command `gunicorn --timeout 180 app:app`.
+5. Choose the available free instance type.
+6. Set `FLASK_SECRET_KEY` to a long random value.
+7. Optionally set `FRED_API_KEY` and `DATA_GOV_IN_API_KEY`.
+8. Deploy and open the generated `onrender.com` URL.
 
-## Data integrity
+`PYTHON_VERSION=3.11.11` is already declared in `render.yaml`. No OpenAI key, paid API, authentication, Redis, Docker, worker, database or persistent storage is required.
 
-All numerical report values originate in the World Bank API response. Missing and partially available values are retained as blank cells. If the API is unavailable or returns no usable observations, the app returns a clear error instead of fallback data.
-
-World Bank is the data provider and does not endorse this application.
+World Bank, FRED and data.gov.in do not endorse this demonstration.

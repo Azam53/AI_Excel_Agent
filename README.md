@@ -33,7 +33,7 @@ python app.py
 
 Open `http://127.0.0.1:5000`.
 
-Optional local configuration can be copied from `.env.example`. Set values in your shell or hosting environment; the app works with World Bank alone.
+Optional local configuration can be copied from `.env.example`. Local `.env` values are loaded automatically; the app works with World Bank alone.
 
 ```env
 FRED_API_KEY=

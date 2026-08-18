@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from flask import Flask, jsonify, render_template, request, send_file, session
+from dotenv import load_dotenv
 from services.parser import ParseError, merge_context, parse_prompt, parse_request
 from services.worldbank import WorldBankError, fetch_report_data
 from services.excel_generator import generate_multi_workbook, generate_workbook
@@ -13,6 +14,8 @@ from services.data_normalizer import normalize_result
 from services.query_planner import build_plan, execute_plan
 from services.registry import METRICS
 from services.source_router import SourceRouter
+
+load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024

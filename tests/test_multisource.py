@@ -132,3 +132,25 @@ def test_explicit_follow_ups_keep_previous_context():
     assert [country["code"] for country in previous["countries"]] == ["IND", "ARE", "SAU"]
     assert previous["metrics"] == ["gdp", "inflation"]
     assert previous["start_year"] == 2021
+
+def test_unregistered_topic_does_not_reuse_previous_context():
+    previous = parse_request("Show Japan population for the last 10 years", 2026)
+    update = parse_request("Show India tourism revenue from 2015 to 2025", 2026, require_complete=False)
+    assert should_extend_context("Show India tourism revenue from 2015 to 2025", previous, update) is False
+
+def test_why_question_gets_explanation_guidance():
+    from app import app
+    client = app.test_client()
+    response = client.post("/api/chat", json={"message":"Why is Japan's population declining?"})
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert "cannot reliably determine the causes" in payload["error"]
+    assert "won’t invent" in payload["error"]
+
+def test_forecast_question_refuses_to_invent_values():
+    from app import app
+    client = app.test_client()
+    response = client.post("/api/chat", json={"message":"Predict India's GDP for the next 10 years"})
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert "won’t generate future numbers" in payload["error"]

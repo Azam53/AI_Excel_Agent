@@ -31,7 +31,9 @@ INDICATORS = [
 ]
 
 class ParseError(ValueError):
-    pass
+    def __init__(self, message, code="clarification"):
+        super().__init__(message)
+        self.code = code
 
 @dataclass(frozen=True)
 class ParsedRequest:
@@ -52,6 +54,10 @@ def parse_prompt(prompt, current_year=None):
     if len(prompt) > 500:
         raise ParseError("Please keep your request under 500 characters.")
     text = prompt.lower().replace("’", "'")
+    if re.search(r"^\s*(?:why|explain|what\s+(?:causes?|caused)|reasons?\s+for)\b", text):
+        raise ParseError("This question asks for causes or interpretation rather than a registered data series.", code="explanation")
+    if re.search(r"\b(?:predict|prediction|forecast|projection|next\s+\d+\s+years?)\b", text):
+        raise ParseError("This question asks for future values that are not present in the public source data.", code="forecast")
     found = []
     for name, code, aliases in COUNTRIES:
         if any(_contains(text, alias) for alias in aliases):
@@ -92,6 +98,10 @@ def parse_request(prompt, current_year=None, require_complete=True):
     if len(prompt) > 500:
         raise ParseError("Please keep your request under 500 characters.")
     text = prompt.lower().replace("’", "'")
+    if re.search(r"^\s*(?:why|explain|what\s+(?:causes?|caused)|reasons?\s+for)\b", text):
+        raise ParseError("This question asks for causes or interpretation rather than a registered data series.", code="explanation")
+    if re.search(r"\b(?:predict|prediction|forecast|projection|next\s+\d+\s+years?)\b", text):
+        raise ParseError("This question asks for future values that are not present in the public source data.", code="forecast")
     detected_countries = []
     for name, code, aliases in COUNTRIES:
         positions = [match.start() for alias in aliases if (match := re.search(r"(?<![a-z])" + re.escape(alias) + r"(?:'s)?(?![a-z])", text))]
@@ -154,9 +164,4 @@ def should_extend_context(message, previous, update):
         return False
     text = (message or "").strip().lower()
     follow_up = re.search(r"^(?:now\s+)?(?:add|include|also|only|after|before|keep|remove)\b", text) or re.search(r"\btoo\s*$", text)
-    if follow_up:
-        return True
-    metrics = update.get("metrics", [])
-    countries = update.get("countries", [])
-    is_complete_request = bool(metrics) and (bool(countries) or all(METRICS[key]["connector"] != "worldbank" for key in metrics))
-    return not is_complete_request
+    return bool(follow_up)

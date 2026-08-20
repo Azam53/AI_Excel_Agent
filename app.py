@@ -48,7 +48,14 @@ def store_artifacts(excel, csv_file, context):
 
 def friendly_error_payload(error, original_message=""):
     detail = str(error)
-    if "measurable topic" in detail:
+    error_code = getattr(error, "code", "clarification")
+    if error_code == "explanation":
+        message = "That’s a useful ‘why’ question. I can show the measured trend from public data, but this rule-based demo cannot reliably determine the causes without broader research. I won’t invent an explanation."
+        suggestions = ["Show Japan population for the last 10 years", "Compare Japan population and GDP growth from 2015 to 2025"]
+    elif error_code == "forecast":
+        message = "That question asks for a forecast. I currently use observed public data only, so I won’t generate future numbers. I can prepare the historical trend instead."
+        suggestions = ["Show India GDP for the last 10 years", "Compare India and China GDP growth from 2015 to 2025"]
+    elif "measurable topic" in detail:
         message = "I understood that you want a data report. Tell me the measurable topic you want to explore, and I’ll connect it to the right public source."
         suggestions = ["Compare India GDP and inflation from 2015 to 2025", "Show Japan population for the last 10 years", "Compare India GDP with Brent crude oil prices"]
     elif "still need a country" in detail:

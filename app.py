@@ -46,6 +46,25 @@ def store_artifacts(excel, csv_file, context):
         artifacts[token] = {"created": now, "excel": excel.getvalue(), "csv": csv_file.getvalue(), "context": context}
     return token
 
+def friendly_error_payload(error, original_message=""):
+    detail = str(error)
+    if "measurable topic" in detail:
+        message = "I understood that you want a data report. Tell me the measurable topic you want to explore, and I’ll connect it to the right public source."
+        suggestions = ["Compare India GDP and inflation from 2015 to 2025", "Show Japan population for the last 10 years", "Compare India GDP with Brent crude oil prices"]
+    elif "still need a country" in detail:
+        message = "I recognized the topic. Add a country name and I can retrieve the matching World Bank series for you."
+        suggestions = ["Show India GDP for the last 10 years", "Compare Germany and France unemployment from 2015 to 2025", "Show Japan life expectancy from 2010 to 2024"]
+    elif "starting year" in detail or "Choose years" in detail or "30 years" in detail:
+        message = f"I understood the request, but the time period needs a small adjustment. {detail}"
+        suggestions = ["Compare India GDP from 2015 to 2025", "Show India inflation for the last 10 years"]
+    elif "5 countries" in detail or "5 metrics" in detail:
+        message = f"That is a useful comparison, but it is larger than this free demo can process in one report. {detail} Try splitting it into two questions."
+        suggestions = ["Compare India, China and USA GDP from 2015 to 2025", "Compare India GDP, inflation and population for the last 10 years"]
+    else:
+        message = f"I’m close, but I need one more detail before I can create a trustworthy report. {detail}"
+        suggestions = ["Compare India and UAE GDP from 2015 to 2025", "Show India's unemployment and GDP growth from 2015 to 2025"]
+    return {"success": False, "error": message, "suggestions": suggestions, "can_retry": True, "original_message": original_message}
+
 @app.post("/api/generate")
 def generate():
     try:
@@ -83,8 +102,8 @@ def chat():
             else:
                 errors.append({"source": raw_result["source"], "metric": raw_result["metric_key"], "country": raw_result.get("country"), "error": "No observations were available for the requested period."})
         if not results:
-            detail = errors[0]["error"] if errors else "No source returned usable data."
-            return jsonify({"success": False, "error": detail, "sources": errors}), 502
+            detail = errors[0]["error"] if errors else "The public sources did not return usable observations for this period."
+            return jsonify({"success": False, "error": "I understood your request, but the public data sources could not complete it just now. " + detail + " Your question is still here, so you can retry or choose a shorter period.", "sources": errors, "suggestions": [message, "Compare India GDP from 2020 to 2024"], "can_retry": True}), 502
         merged = merge_results(results, context["start_year"], context["end_year"])
         excel = generate_multi_workbook(context, results, merged, errors); csv_file = generate_csv(merged); token = store_artifacts(excel, csv_file, context)
         session["conversation"] = context
@@ -95,7 +114,7 @@ def chat():
         if any(result["metadata"].get("aggregation") for result in results): summary += " Higher-frequency FRED observations were converted to documented annual averages."
         if errors: summary += " The report uses all available datasets; unavailable sources are listed below."
         return jsonify({"success": True, "message": summary, "context": {"countries": [c["name"] for c in context["countries"]], "metrics": [METRICS[m]["label"] for m in context["metrics"]], "start_year": context["start_year"], "end_year": context["end_year"]}, "sources": successes + failures, "preview": merged["rows"][:10], "columns": merged["columns"], "data": merged["rows"], "excel_available": True, "csv_available": True, "download_token": token})
-    except ParseError as exc: return jsonify({"success": False, "error": str(exc)}), 400
+    except ParseError as exc: return jsonify(friendly_error_payload(exc, payload.get("message", "") if 'payload' in locals() else "")), 400
     except Exception:
         app.logger.exception("Chat request failed"); return jsonify({"success": False, "error": "We couldn't build this report. Please try again."}), 500
 

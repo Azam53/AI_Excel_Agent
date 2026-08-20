@@ -118,8 +118,8 @@ def parse_request(prompt, current_year=None, require_complete=True):
     elif after: start, end = int(after.group(1)) + 1, None
     else: start = end = None
     if require_complete:
-        if not metric_keys: raise ParseError("No supported metric detected.")
-        if not countries and any(METRICS[key]["connector"] == "worldbank" for key in metric_keys): raise ParseError("No country detected. Please include at least one supported country.")
+        if not metric_keys: raise ParseError("I need a measurable topic before I can build the report.")
+        if not countries and any(METRICS[key]["connector"] == "worldbank" for key in metric_keys): raise ParseError("I recognized the metric, and I still need a country for that public dataset.")
         if start is None: start, end = now - 9, now
     if start is not None and end is not None:
         if start > end: raise ParseError("The starting year must be before the ending year.")
@@ -142,8 +142,8 @@ def merge_context(previous, update, current_year=None):
     end = update.get("end_year") if update.get("end_year") is not None else previous.get("end_year")
     if start is None: start = now - 9
     if end is None: end = previous.get("end_year", now)
-    if not metrics: raise ParseError("Please include at least one supported metric.")
-    if not countries and any(METRICS[key]["connector"] == "worldbank" for key in metrics): raise ParseError("Please include at least one supported country.")
+    if not metrics: raise ParseError("I need a measurable topic before I can build the report.")
+    if not countries and any(METRICS[key]["connector"] == "worldbank" for key in metrics): raise ParseError("I recognized the metric, and I still need a country for that public dataset.")
     if len(countries) > 5 or len(metrics) > 5 or end - start + 1 > 30:
         raise ParseError("Limit requests to 5 countries, 5 metrics and 30 years.")
     return {"countries": countries, "metrics": metrics, "start_year": start, "end_year": end}

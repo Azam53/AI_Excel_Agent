@@ -94,3 +94,22 @@ def test_fred_only_plan_does_not_require_country():
     parsed = parse_request("Show Brent crude oil prices from 2020 to 2024", 2026)
     assert parsed["countries"] == []
     assert build_plan(parsed)["tasks"][0]["source"] == "fred"
+
+def test_chat_guides_user_when_metric_is_missing():
+    from app import app
+    client = app.test_client()
+    response = client.post("/api/chat", json={"message":"Tell me something about India"})
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert "measurable topic" in payload["error"]
+    assert len(payload["suggestions"]) >= 2
+    assert payload["can_retry"] is True
+
+def test_chat_guides_user_when_country_is_missing():
+    from app import app
+    client = app.test_client()
+    response = client.post("/api/chat", json={"message":"Show GDP from 2020 to 2024"})
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert "Add a country" in payload["error"]
+    assert payload["suggestions"]

@@ -154,3 +154,9 @@ def test_forecast_question_refuses_to_invent_values():
     payload = response.get_json()
     assert response.status_code == 400
     assert "won’t generate future numbers" in payload["error"]
+
+def test_popular_country_expansion_and_aliases():
+    parsed = parse_request("Compare Pakistan, Bangladesh, Nigeria, Vietnam and South Africa GDP from 2015 to 2025", 2026)
+    assert [country["code"] for country in parsed["countries"]] == ["PAK", "BGD", "NGA", "VNM", "ZAF"]
+    aliases = parse_request("Compare Turkiye, Holland and Czechia inflation from 2020 to 2024", 2026)
+    assert [country["code"] for country in aliases["countries"]] == ["TUR", "NLD", "CZE"]

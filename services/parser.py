@@ -147,3 +147,16 @@ def merge_context(previous, update, current_year=None):
     if len(countries) > 5 or len(metrics) > 5 or end - start + 1 > 30:
         raise ParseError("Limit requests to 5 countries, 5 metrics and 30 years.")
     return {"countries": countries, "metrics": metrics, "start_year": start, "end_year": end}
+
+def should_extend_context(message, previous, update):
+    """Return True only for clearly incremental or incomplete follow-up requests."""
+    if not previous:
+        return False
+    text = (message or "").strip().lower()
+    follow_up = re.search(r"^(?:now\s+)?(?:add|include|also|only|after|before|keep|remove)\b", text) or re.search(r"\btoo\s*$", text)
+    if follow_up:
+        return True
+    metrics = update.get("metrics", [])
+    countries = update.get("countries", [])
+    is_complete_request = bool(metrics) and (bool(countries) or all(METRICS[key]["connector"] != "worldbank" for key in metrics))
+    return not is_complete_request

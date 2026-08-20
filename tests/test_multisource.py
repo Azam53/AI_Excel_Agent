@@ -6,7 +6,7 @@ from connectors.fred import FredConnector
 from services.csv_generator import generate_csv
 from services.data_merger import merge_results
 from services.excel_generator import generate_multi_workbook
-from services.parser import merge_context, parse_request
+from services.parser import merge_context, parse_request, should_extend_context
 from services.query_planner import build_plan, execute_plan
 from services.source_router import SourceRouter
 
@@ -113,3 +113,22 @@ def test_chat_guides_user_when_country_is_missing():
     assert response.status_code == 400
     assert "Add a country" in payload["error"]
     assert payload["suggestions"]
+
+def test_complete_question_replaces_previous_context():
+    previous = parse_request("Compare India and UAE GDP and inflation from 2015 to 2025", 2026)
+    update = parse_request("Show Japan population for the last 10 years", 2026, require_complete=False)
+    assert should_extend_context("Show Japan population for the last 10 years", previous, update) is False
+    context = merge_context(None, update, 2026)
+    assert [country["name"] for country in context["countries"]] == ["Japan"]
+    assert context["metrics"] == ["population"]
+    assert (context["start_year"], context["end_year"]) == (2017, 2026)
+
+def test_explicit_follow_ups_keep_previous_context():
+    previous = parse_request("Compare India and UAE GDP from 2015 to 2025", 2026)
+    for message in ("Add Saudi Arabia", "Add inflation too", "Only show data after 2020"):
+        update = parse_request(message, 2026, require_complete=False)
+        assert should_extend_context(message, previous, update) is True
+        previous = merge_context(previous, update, 2026)
+    assert [country["code"] for country in previous["countries"]] == ["IND", "ARE", "SAU"]
+    assert previous["metrics"] == ["gdp", "inflation"]
+    assert previous["start_year"] == 2021

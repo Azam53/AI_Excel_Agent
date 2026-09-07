@@ -138,22 +138,29 @@ def test_unregistered_topic_does_not_reuse_previous_context():
     update = parse_request("Show India tourism revenue from 2015 to 2025", 2026, require_complete=False)
     assert should_extend_context("Show India tourism revenue from 2015 to 2025", previous, update) is False
 
-def test_why_question_gets_explanation_guidance():
+def test_why_question_gets_explanation_guidance(monkeypatch):
+    monkeypatch.setenv('WEB_SEARCH_PROVIDER', '')
+    monkeypatch.delenv('WEB_SEARCH_API_KEY', raising=False)
     from app import app
     client = app.test_client()
     response = client.post("/api/chat", json={"message":"Why is Japan's population declining?"})
     payload = response.get_json()
-    assert response.status_code == 400
-    assert "cannot reliably determine the causes" in payload["error"]
-    assert "won’t invent" in payload["error"]
+    assert response.status_code == 200
+    assert payload['mode'] == 'web'
+    assert 'not currently configured' in payload['web']['message']
+    assert payload['web']['results'] == []
 
-def test_forecast_question_refuses_to_invent_values():
+def test_forecast_question_refuses_to_invent_values(monkeypatch):
+    monkeypatch.setenv('WEB_SEARCH_PROVIDER', '')
+    monkeypatch.delenv('WEB_SEARCH_API_KEY', raising=False)
     from app import app
     client = app.test_client()
     response = client.post("/api/chat", json={"message":"Predict India's GDP for the next 10 years"})
     payload = response.get_json()
-    assert response.status_code == 400
-    assert "won’t generate future numbers" in payload["error"]
+    assert response.status_code == 200
+    assert payload['mode'] == 'web'
+    assert payload['web']['results'] == []
+    assert payload['excel_available'] is False
 
 def test_popular_country_expansion_and_aliases():
     parsed = parse_request("Compare Pakistan, Bangladesh, Nigeria, Vietnam and South Africa GDP from 2015 to 2025", 2026)

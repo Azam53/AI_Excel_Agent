@@ -3,6 +3,8 @@ import re
 import secrets
 import threading
 import time
+import logging
+from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request, send_file, session
 from dotenv import load_dotenv
 from services.parser import ParseError, merge_context, parse_prompt, parse_request, should_extend_context
@@ -14,10 +16,15 @@ from services.data_normalizer import normalize_result
 from services.query_planner import build_plan, execute_plan
 from services.registry import METRICS
 from services.source_router import SourceRouter
+from connectors.web_search import WebSearchConnector, WebSearchError
+from services.request_interpreter import interpret_request
+from services.search_query_builder import build_search_query
+from services.search_export import generate_search_exports
 
 load_dotenv()
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 ARTIFACT_TTL = 15 * 60
@@ -33,6 +40,7 @@ def filename_for(parsed):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
 
 def safe_report_name(context, extension):
+    if context.get('mode') == 'web': return 'Search_Results.' + extension
     metrics = "_".join(METRICS[key]["label"] for key in context["metrics"])
     raw = f'{metrics}_{context["start_year"]}_{context["end_year"]}.{extension}'
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
@@ -96,15 +104,14 @@ def generate():
 @app.get("/api/sources")
 def source_status(): return jsonify({"sources": SourceRouter().statuses()})
 
-@app.post("/api/chat")
-def chat():
+def structured_chat(message):
     try:
-        payload = request.get_json(silent=True) or {}; message = payload.get("message", "")
         update = parse_request(message, require_complete=False)
         previous = session.get("conversation")
         context_mode = "follow_up" if should_extend_context(message, previous, update) else "new_request"
         context = merge_context(previous if context_mode == "follow_up" else None, update)
         plan = build_plan(context); raw_results, errors = execute_plan(plan); results = []
+        app.logger.info('selected_connectors=%s errors=%d', ','.join(sorted({task['source'] for task in plan['tasks']})), len(errors))
         for raw_result in raw_results:
             if any(row["value"] is not None for row in raw_result["records"]):
                 results.append(normalize_result(raw_result))
@@ -123,9 +130,90 @@ def chat():
         if any(result["metadata"].get("aggregation") for result in results): summary += " Higher-frequency FRED observations were converted to documented annual averages."
         if errors: summary += " The report uses all available datasets; unavailable sources are listed below."
         return jsonify({"success": True, "message": summary, "context_mode": context_mode, "context": {"countries": [c["name"] for c in context["countries"]], "metrics": [METRICS[m]["label"] for m in context["metrics"]], "start_year": context["start_year"], "end_year": context["end_year"]}, "sources": successes + failures, "preview": merged["rows"][:10], "columns": merged["columns"], "data": merged["rows"], "excel_available": True, "csv_available": True, "download_token": token})
-    except ParseError as exc: return jsonify(friendly_error_payload(exc, payload.get("message", "") if 'payload' in locals() else "")), 400
+    except ParseError as exc: return jsonify(friendly_error_payload(exc, message)), 400
     except Exception:
         app.logger.exception("Chat request failed"); return jsonify({"success": False, "error": "We couldn't build this report. Please try again."}), 500
+
+
+def request_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict): raise ParseError('Input must be a JSON object.')
+    message = payload.get('message', '')
+    route = interpret_request(message, session.get('conversation'), session.get('web_context'))
+    if payload.get('research_only') is True:
+        route = {'structured': None, 'web': message, 'follow_up': False}
+    return message, route
+
+
+@app.post('/api/chat/plan')
+def chat_plan():
+    """Read-only preview so progress never falsely announces a web search."""
+    try:
+        _, route = request_route()
+        steps = ['Understanding request...', 'Checking structured data sources...']
+        if route['structured']:
+            update = parse_request(route['structured'], require_complete=False)
+            context = merge_context(session.get('conversation') if should_extend_context(route['structured'], session.get('conversation'), update) else None, update)
+            names = sorted({task['source'] for task in build_plan(context)['tasks']})
+            steps += [', '.join(names) + ' dataset found.', 'Fetching data...', 'Building report...']
+        else:
+            steps += ['No matching structured dataset found.']
+        if route['web']:
+            steps += ['Searching the web...', 'Ranking sources...', 'Preparing results...'] if WebSearchConnector().is_available() else ['Web search is not currently configured.']
+        return jsonify({'steps': steps})
+    except ParseError as exc:
+        return jsonify(friendly_error_payload(exc)), 400
+
+
+@app.post('/api/chat')
+def chat():
+    try:
+        message, route = request_route()
+        mode = 'mixed' if route['structured'] and route['web'] else 'structured' if route['structured'] else 'web'
+        app.logger.info('request_mode=%s search_fallback=%s', mode, bool(route['web']))
+        data, status = {}, 200
+        if route['structured']:
+            response = app.make_response(structured_chat(route['structured']))
+            data, status = response.get_json(), response.status_code
+        if not route['web']:
+            session.pop('web_context', None)
+            data['mode'] = mode
+            return jsonify(data), status
+        query, web_context = build_search_query(route['web'], session.get('web_context') if route['follow_up'] else None)
+        # A mixed clause can inherit the explicitly requested country.
+        if mode == 'mixed' and not web_context['country']:
+            countries = parse_request(route['structured'], require_complete=False)['countries']
+            if countries:
+                web_context['country'] = countries[0]['name']
+                query = (countries[0]['name'] + ' ' + query)[:500]
+        session['web_context'] = web_context
+        if mode == 'web': session.pop('conversation', None)
+        connector = WebSearchConnector()
+        research = {'query': query, 'results': [], 'provider': connector.provider,
+                    'generated_at': datetime.now(timezone.utc).isoformat(), 'original_question': message}
+        if not connector.is_available():
+            research.update(status='not_configured', message="I couldn't find this in the connected structured datasets, and web search is not currently configured.")
+        else:
+            try:
+                research.update(connector.search(query))
+                research['status'] = 'success' if research['results'] else 'empty'
+                research['message'] = 'I found relevant web sources for this question. Review the results below for the latest information.' if research['results'] else "I couldn't find a reliable source for this request. Try a more specific question."
+                if research['results']:
+                    excel, csv_file = generate_search_exports(message, research)
+                    research['download_token'] = store_artifacts(excel, csv_file, {'mode': 'web'})
+            except WebSearchError as exc:
+                research.update(status='error', message=str(exc))
+        app.logger.info('selected_connector=web_search provider=%s results=%d status=%s', connector.provider if connector.provider in {'tavily', 'tavily-keyless'} else 'unconfigured', len(research['results']), research['status'])
+        data.update(mode=mode, web=research)
+        if not data.get('success'):
+            if data.get('error'): data['structured_error'] = data.pop('error')
+            data.update(success=True, message=research['message'], excel_available=False, csv_available=False)
+        return jsonify(data)
+    except ParseError as exc:
+        return jsonify(friendly_error_payload(exc)), 400
+    except Exception:
+        app.logger.error('Chat processing failed (details suppressed to protect credentials)')
+        return jsonify({'success': False, 'error': "I couldn't complete this request right now. Please try again."}), 500
 
 @app.get("/api/download/<token>/<file_type>")
 def download_report(token, file_type):
@@ -137,7 +225,10 @@ def download_report(token, file_type):
     return send_file(BytesIO(artifact[file_type]), as_attachment=True, download_name=safe_report_name(artifact["context"], extension), mimetype=mimetype)
 
 @app.post("/api/chat/reset")
-def reset_chat(): session.pop("conversation", None); return jsonify({"success": True})
+def reset_chat():
+    session.pop("conversation", None)
+    session.pop('web_context', None)
+    return jsonify({"success": True})
 
 @app.errorhandler(413)
 def too_large(_): return jsonify({"error": "Request is too large."}), 413

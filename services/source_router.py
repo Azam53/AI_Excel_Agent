@@ -2,6 +2,7 @@ from connectors.worldbank import WorldBankConnector
 from connectors.fred import FredConnector
 from connectors.data_gov_india import DataGovIndiaConnector
 from services.registry import METRICS
+from connectors.web_search import WebSearchConnector
 
 class SourceRouter:
     def __init__(self, connectors=None):
@@ -10,4 +11,10 @@ class SourceRouter:
         connector_name = METRICS.get(metric, {}).get("connector")
         if not connector_name or connector_name not in self.connectors: raise ValueError(f"No connector registered for {metric}.")
         return connector_name, self.connectors[connector_name]
-    def statuses(self): return [connector.status() for connector in self.connectors.values()]
+    def statuses(self):
+        statuses = []
+        for connector in self.connectors.values():
+            status = connector.status()
+            status.update(type='structured', status='connected' if status['available'] else 'not_configured')
+            statuses.append(status)
+        return statuses + [WebSearchConnector().status()]
